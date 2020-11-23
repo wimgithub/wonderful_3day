@@ -46,6 +46,7 @@ contract ETH_3Day {
     uint256 public minAmount = 1 ether;
     uint256 public percentage = 900;
     uint256 public totalUsers;
+    bool public ISEND;
     
     struct RechargeInfo{
         address rec_addr;
@@ -57,7 +58,6 @@ contract ETH_3Day {
 		address   referrer;   
         address[] directPush; 
         uint256 amountWithdrawn;
-        uint256 distributionIncome72;
     }
     mapping(address => UserInfo) public user;
     mapping(address => uint256) public balance;
@@ -66,21 +66,13 @@ contract ETH_3Day {
     constructor()public{
         manager = msg.sender;
      }
-    
-    // 充值
+
     function deposit(address referrer) payable public {
-        require(msg.value > 0);
-        // require(msg.value >= minAmount,"Top up cannot be less than 1 eth");
-        // 验证72小时-分钱
-        distribution72();
-        
+        require(msg.value > 0 && isTime() == false && msg.value >= minAmount);
         UserInfo storage u = user[msg.sender];
-        //  当前用户没有上    &&      推荐人 不能是 自己
 		if (u.referrer == address(0) && referrer != msg.sender) {
-			// 添加上级
             u.referrer = referrer;
             if (userDireMap[referrer][msg.sender] == false){
-                // 给上级添加当前下级
                 user[referrer].directPush.push(msg.sender);
                 userDireMap[referrer][msg.sender] = true;
             }
@@ -89,34 +81,27 @@ contract ETH_3Day {
 		if (balance[msg.sender] == 0){
 		    totalUsers = totalUsers.add(1);
 		}
-		// 充值
 		balance[msg.sender] = balance[msg.sender].add(msg.value);
 		rechargeAddress.push(RechargeInfo({rec_addr:msg.sender,rec_value:msg.value,rec_time:block.timestamp}));
 		rechargeTime = block.timestamp;
     }
     
-    // 提币
     function withdraw(uint256 value) public {
         require(value > 0);
-        // 验证是否有足够提取额度
-        uint256 count = availableQuantity(msg.sender);
+        uint256 count = getIncome(msg.sender);
         require(count >= value,"Not enough quota");
-        // 提币
         msg.sender.transfer(value);
         user[msg.sender].amountWithdrawn = user[msg.sender].amountWithdrawn.add(value);
     }
     
-    // pool 总量
     function getPoolETH() view public returns(uint256){
         return address(this).balance;
     }
     
-    // 充值总笔数
     function getRecTotal() view public returns(uint256){
         return rechargeAddress.length;
     }
     
-    // 最后10笔交易
     function getRec10() view public returns(RechargeInfo[] memory){
         uint256 l = rechargeAddress.length;
         uint256 a = 0;
@@ -133,7 +118,6 @@ contract ETH_3Day {
         return data;
     }
     
-    // 超过72小时分币
     function distribution72() public {
         if (isTime() == false){return;}
         uint256 a = 0;
@@ -142,12 +126,12 @@ contract ETH_3Day {
         }
         uint256 total = (address(this).balance.mul(percentage)).div(uint256(1000));
         for (;a < rechargeAddress.length; a++){
-            user[rechargeAddress[a].rec_addr].distributionIncome72 = user[rechargeAddress[a].rec_addr].distributionIncome72.add(total.div(100));
+            payable(rechargeAddress[a].rec_addr).transfer(total.div(50));
         }
+        ISEND = true;
         return;
     }
     
-    // 当前时间是否大于 72 小时
     function isTime()view public returns(bool) {
         if ((block.timestamp.sub(rechargeTime)) >= day && rechargeTime != 0){
             return true;
@@ -155,7 +139,6 @@ contract ETH_3Day {
         return false;
     }
     
-    // 直推倍数
     function directPushMultiple(address addr) view public isAddress(addr) returns(uint256) {
         if(balance[addr] == 0){
             return 0;
@@ -163,49 +146,30 @@ contract ETH_3Day {
         return getDirectTotal(addr).div(balance[addr]);
     }
     
-    // 最大收益
     function getMaxIncome(address addr) view public isAddress(addr) returns(uint256){
-        return directPushMultiple(addr).mul(balance[addr]);
+        return getDirectTotal(addr).sub(user[addr].amountWithdrawn);
     }
     
-    // 当前收益
     function getIncome(address addr) view public isAddress(addr) returns(uint256){
         uint256 multiple = directPushMultiple(addr);
-        if (multiple == 0){
+        if (multiple < 3){
             return 0;
         }
-        if (multiple > 3){
-            multiple = 3;
-        }
-        return balance[addr].mul(multiple);
+        return (balance[addr].mul(3).sub(user[addr].amountWithdrawn));
     }
     
-    // 当前已提取数量
     function numberWithdrawn(address addr) view public isAddress(addr) returns(uint256) {
         return user[addr].amountWithdrawn;
     }
-    
-    // 当前可提取数量
-    function availableQuantity(address addr) view public isAddress(addr) returns(uint256) {
-        if (directPushMultiple(addr) < 3){
+
+    function additionalThrow(address addr) view public isAddress(addr) returns(uint256){
+        uint256 multiple = directPushMultiple(addr);
+        if (multiple < 3){
             return 0;
         }
-        return getIncome(addr).sub(numberWithdrawn(addr));
+        return (getDirectTotal(addr).sub(user[addr].amountWithdrawn).sub(getIncome(addr))).div(3);
     }
-    
-    // 追投计算  (直推总额 - (本金 * 3)) / 3                 追投数量，获得金额
-    function additionalThrow(address addr) view public isAddress(addr) returns(uint256,uint256){
-        // 直推总额
-        uint256 dirTotal = getDirectTotal(addr);
-        // 用户当前收益
-        uint256 userTotal = getIncome(addr);
-        // 追投数量
-        uint256 ztAmount = (dirTotal.sub(userTotal)).div(CONTRACT_BALANCE_STEP);
-        // uint256 t = ztAmount.div(CONTRACT_BALANCE_STEP);
-        return (ztAmount,ztAmount.mul(CONTRACT_BALANCE_STEP));
-    }
-    
-    // 获取下级充值总额
+
     function getDirectTotal(address addr) view public isAddress(addr) returns(uint256) {
         UserInfo memory u = user[addr];
         if (u.directPush.length == 0){return (0);}
@@ -216,24 +180,15 @@ contract ETH_3Day {
         return (total);
     }
     
-    // 72收益领取
-    function distributionIncome72()public{
-        require(user[msg.sender].distributionIncome72 > 0);
-        msg.sender.transfer(user[msg.sender].distributionIncome72);
-    }
-    
-    // 获取用户下级
     function getDirectLength(address addr) view public isAddress(addr) returns(uint256){
         return user[addr].directPush.length;
     }
     
-    // Owner 提币
     function ownerWitETH(uint256 value) public onlyOwner{
-        require(getPoolETH() >= value);
+        require(getPoolETH() >= value && ISEND == true);
         msg.sender.transfer(value);
     }
     
-    // 权限转移
     function ownerTransfer(address newOwner) public onlyOwner isAddress(newOwner) {
         manager = newOwner;
     }
@@ -249,3 +204,4 @@ contract ETH_3Day {
     }
 
 }
+
