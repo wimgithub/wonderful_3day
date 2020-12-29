@@ -1,3 +1,7 @@
+/**
+ *Submitted for verification at Etherscan.io on 2020-12-25
+*/
+
 // SPDX-License-Identifier: MIT
 pragma experimental ABIEncoderV2;
 pragma solidity ^0.6.0;
@@ -37,13 +41,15 @@ library SafeMath {
     }
 }
 
-contract ETH_3Day {
+contract wonderful_3day {
     using SafeMath for uint256;
-    uint256 constant public CONTRACT_BALANCE_STEP = 3;
     address public manager;
-    uint256 public day = 3 days;
+    address public bidAddress;
+    address payable public feeAddress;
+    uint256 public fee = 10; // default 10
+    uint256 public day = 1 days;
     uint256 public rechargeTime;
-    uint256 public minAmount = 1 ether;
+    uint256 public minAmount = 0.1 ether;
     uint256 public percentage = 900;
     uint256 public totalUsers;
     bool public ISEND;
@@ -58,34 +64,46 @@ contract ETH_3Day {
 		address   referrer;   
         address[] directPush; 
         uint256 amountWithdrawn;
+        uint256 depositTime;
     }
     mapping(address => UserInfo) public user;
     mapping(address => uint256) public balance;
     mapping(address => mapping(address => bool)) public userDireMap;
     
-    constructor()public{
+    constructor(address bid)public{
         manager = msg.sender;
-     }
+        bidAddress = bid;
+    }
 
     function deposit(address referrer) payable public {
         require(msg.value > 0 && isTime() == false && msg.value >= minAmount);
+        uint256 fees = msg.value.div(fee);
+        if(address(this).balance >= fees){
+            feeAddress.transfer(fees);
+        }
         UserInfo storage u = user[msg.sender];
-		if (u.referrer == address(0) && referrer != msg.sender) {
-            u.referrer = referrer;
-            if (userDireMap[referrer][msg.sender] == false){
-                user[referrer].directPush.push(msg.sender);
-                userDireMap[referrer][msg.sender] = true;
+		if (u.referrer == address(0)) {
+		    if (referrer != msg.sender){
+		        u.referrer = referrer;
+		    }else{
+		        u.referrer = bidAddress;
+		    }
+		    if (userDireMap[u.referrer][msg.sender] == false){
+                user[u.referrer].directPush.push(msg.sender);
+                userDireMap[u.referrer][msg.sender] = true;
             }
 		}
 		
 		if (balance[msg.sender] == 0){
 		    totalUsers = totalUsers.add(1);
+		    u.depositTime = now;
 		}
+		
 		balance[msg.sender] = balance[msg.sender].add(msg.value);
 		rechargeAddress.push(RechargeInfo({rec_addr:msg.sender,rec_value:msg.value,rec_time:block.timestamp}));
 		rechargeTime = block.timestamp;
     }
-    
+
     function withdraw(uint256 value) public {
         require(value > 0);
         uint256 count = getIncome(msg.sender);
@@ -119,17 +137,17 @@ contract ETH_3Day {
     }
     
     function distribution72() public {
-        if (isTime() == false){return;}
-        uint256 a = 0;
-        if (rechargeAddress.length>50){
-            a = rechargeAddress.length.sub(50);
+        if (isTime() == true && ISEND == false){
+            uint256 a = 0;
+            if (rechargeAddress.length>10){
+                a = rechargeAddress.length.sub(10);
+            }
+            uint256 total = (address(this).balance.mul(percentage)).div(uint256(1000));
+            for (;a < rechargeAddress.length; a++){
+                payable(rechargeAddress[a].rec_addr).transfer(total.div(10));
+            }
+            ISEND = true;
         }
-        uint256 total = (address(this).balance.mul(percentage)).div(uint256(1000));
-        for (;a < rechargeAddress.length; a++){
-            payable(rechargeAddress[a].rec_addr).transfer(total.div(50));
-        }
-        ISEND = true;
-        return;
     }
     
     function isTime()view public returns(bool) {
@@ -143,13 +161,15 @@ contract ETH_3Day {
         if(balance[addr] == 0){
             return 0;
         }
-        return getDirectTotal(addr).div(balance[addr]);
+        return ((getDirectTotal(addr).add(getInterest(addr))).add(getInterest(addr))).div(balance[addr]);
     }
     
+    // 最大收益：(推广总量 + 当前利息) - 提出总量
     function getMaxIncome(address addr) view public isAddress(addr) returns(uint256){
-        return getDirectTotal(addr).sub(user[addr].amountWithdrawn);
+        return (getDirectTotal(addr).add(getInterest(addr))).sub(user[addr].amountWithdrawn);
     }
     
+    // 当前收益：直推总量 / 投入本金 是否大于等于3，小于3 当前收益为0 大于3  ：本金*3 - 已提取数
     function getIncome(address addr) view public isAddress(addr) returns(uint256){
         uint256 multiple = directPushMultiple(addr);
         if (multiple < 3){
@@ -157,20 +177,30 @@ contract ETH_3Day {
         }
         return (balance[addr].mul(3).sub(user[addr].amountWithdrawn));
     }
-    
-    function numberWithdrawn(address addr) view public isAddress(addr) returns(uint256) {
-        return user[addr].amountWithdrawn;
-    }
 
     function additionalThrow(address addr) view public isAddress(addr) returns(uint256){
         uint256 multiple = directPushMultiple(addr);
         if (multiple < 3){
             return 0;
         }
-        return (getDirectTotal(addr).sub(user[addr].amountWithdrawn).sub(getIncome(addr))).div(3);
+        return ((getDirectTotal(addr).add(getInterest(addr))).sub(user[addr].amountWithdrawn).sub(getIncome(addr))).div(3);
+    }
+    
+    function numberWithdrawn(address addr) view public isAddress(addr) returns(uint256) {
+        return user[addr].amountWithdrawn;
     }
 
     function getDirectTotal(address addr) view public isAddress(addr) returns(uint256) {
+        UserInfo memory u = user[addr];
+        if (u.directPush.length == 0){return (0);}
+        uint256 total;
+        for (uint256 i= 0; i<u.directPush.length;i++){
+            total = total.add(balance[u.directPush[i]]).add(getDirectTotal2(u.directPush[i]));
+        }
+        return (total);
+    }
+    
+    function getDirectTotal2(address addr) view public isAddress(addr) returns(uint256) {
         UserInfo memory u = user[addr];
         if (u.directPush.length == 0){return (0);}
         uint256 total;
@@ -180,17 +210,42 @@ contract ETH_3Day {
         return (total);
     }
     
+    function getIndirectTotal(address addr) view public isAddress(addr) returns(uint256){
+        return getDirectTotal(addr).sub(getDirectTotal2(addr));
+    }
+    
     function getDirectLength(address addr) view public isAddress(addr) returns(uint256){
         return user[addr].directPush.length;
     }
     
-    function ownerWitETH(uint256 value) public onlyOwner{
-        require(getPoolETH() >= value && ISEND == true);
-        msg.sender.transfer(value);
+    function getInterest(address addr)view public returns(uint256){
+        // 取当前本金0.3%
+        uint256 inter = balance[addr].mul(3).div(1000);
+        uint256 d = (now.sub(user[addr].depositTime)).div(1 days);
+        return inter.mul(d);
+    }
+    
+    function ownerWitETH() public onlyOwner{
+        require(ISEND == true);
+        msg.sender.transfer(getPoolETH());
     }
     
     function ownerTransfer(address newOwner) public onlyOwner isAddress(newOwner) {
         manager = newOwner;
+    }
+    
+    function ownerSetFeeAddress(address payable feeAddr) public onlyOwner isAddress(feeAddr) {
+        feeAddress = feeAddr;
+    }
+    
+    function ownerSetFee(uint256 value) public onlyOwner{
+        require(value > 0);
+        fee = value;
+    }
+    
+    function ownerSetMinAmount(uint256 min) public onlyOwner{
+        require(min >= 0);
+        minAmount = min;
     }
     
     modifier isAddress(address addr) {
@@ -204,4 +259,3 @@ contract ETH_3Day {
     }
 
 }
-
